@@ -14,8 +14,8 @@
         }
         #gameField { 
             position: relative; 
-            width: 400px; 
-            height: 400px; 
+            width: 500px; 
+            height: 500px; 
             border: 2px solid black; 
         }
         #buttonContainer {
@@ -45,6 +45,7 @@
     <div>
         <div id="buttonContainer">
             <button id="launchButton">Launch Ball</button>
+            <button id="autoButton">Auto</button>
             <button id="clearButton">Clear</button>
         </div>
         <div id="gameField">
@@ -63,6 +64,7 @@ const audioEngine = new AudioEngine();
 
 const gameField = document.getElementById('gameField');
 const launchButton = document.getElementById('launchButton');
+const autoButton = document.getElementById('autoButton');
 const clearButton = document.getElementById('clearButton');
 const launchPoint = document.getElementById('launchPoint');
 
@@ -74,11 +76,13 @@ const sounds = Array.from({ length: 16 }, (_, i) => `samples/${String(i + 1).pad
 const shadesOfGray = Array.from({ length: 16 }, (_, i) => `rgb(${16 * i}, ${16 * i}, ${16 * i})`); // Darkest to lightest
 
 let launchPointController;
+let autoLaunchTimeout = null;
+let isAutoLaunching = false;
 
-// Ball sizes: largest (1/8) to smallest (1/24)
+// Ball sizes: largest (1/4) to smallest (1/24)
 const gameFieldSize = gameField.clientWidth;
 const ballSizes = Array.from({ length: 16 }, (_, i) =>
-    gameFieldSize * (1 / 5 - (i / 16) * (1 / 6 - 1 / 24))
+    gameFieldSize * (1 / 4 - (i / 16) * (1 / 6 - 1 / 24))
 );
 
 class LaunchPointController {
@@ -87,7 +91,7 @@ class LaunchPointController {
         this.fieldWidth = fieldWidth;
         this.position = 0;
         this.direction = 1;
-        this.speed = 2;
+        this.speed = 1;
         this.updatePosition();
         this.animate();
     }
@@ -194,17 +198,17 @@ class Ball {
     }
 
     handleCollision() {
-    this.collisions += 1;
+        this.collisions += 1;
 
-    // Calculate the new shade of gray
-    const grayValue = Math.floor((this.collisions / maxCollisions) * 255);
-    this.element.style.backgroundColor = `rgb(${grayValue}, ${grayValue}, ${grayValue})`;
+        // Calculate the new shade of gray
+        const grayValue = Math.floor((this.collisions / maxCollisions) * 255);
+        this.element.style.backgroundColor = `rgb(${grayValue}, ${grayValue}, ${grayValue})`;
 
-    // Check if the ball reached its maximum collisions
-    if (this.collisions >= maxCollisions) {
-        this.remove();
+        // Check if the ball reached its maximum collisions
+        if (this.collisions >= maxCollisions) {
+            this.remove();
+        }
     }
-}
 
     remove() {
         gameField.removeChild(this.element);
@@ -212,7 +216,6 @@ class Ball {
         if (index !== -1) balls.splice(index, 1);
     }
 }
-
 
 function createBall() {
     if (balls.length < maxBalls) {
@@ -267,12 +270,86 @@ function checkCollisionBetweenBalls(ball1, ball2) {
     }
 }
 
+function generateRandomLaunchSequence() {
+    // Target: 2 balls in 10 seconds
+    const targetBallCount = 2;
+    const timeWindow = 10000; // 10 seconds
+
+    // Fallback to a minimum number of balls if Poisson distribution yields zero
+    function poissonRandom(lambda) {
+        const L = Math.exp(-lambda);
+        let p = 1;
+        let k = 0;
+        do {
+            k++;
+            p *= Math.random();
+        } while (p > L);
+        return Math.max(1, k - 1); // Ensure at least 1 ball
+    }
+
+    // Generate ball count using Poisson distribution
+    const ballCount = poissonRandom(targetBallCount);
+
+    // Generate random launch times
+    const launchTimes = [];
+    for (let i = 0; i < ballCount; i++) {
+        launchTimes.push(Math.random() * timeWindow);
+    }
+
+    // Sort launch times
+    return launchTimes.sort((a, b) => a - b);
+}
+
+function startAutoLaunch() {
+    if (isAutoLaunching) return;
+    isAutoLaunching = true;
+    autoButton.textContent = 'Stop Auto';
+
+    function continuousLaunchCycle() {
+        if (!isAutoLaunching) return;
+
+        const launchTimes = generateRandomLaunchSequence();
+        
+        launchTimes.forEach((time, index) => {
+            autoLaunchTimeout = setTimeout(() => {
+                // Only create a ball if we haven't reached max balls
+                if (balls.length < maxBalls) {
+                    createBall();
+                }
+                
+                // If this is the last ball in the sequence, schedule next cycle
+                if (index === launchTimes.length - 1) {
+                    // Schedule next cycle with a small random variation
+                    const nextCycleDelay = 10000 + (Math.random() * 2000 - 1000); // 10s ± 1s
+                    autoLaunchTimeout = setTimeout(continuousLaunchCycle, nextCycleDelay);
+                }
+            }, time);
+        });
+    }
+
+    // Start the first launch cycle
+    continuousLaunchCycle();
+}
+
+function stopAutoLaunch() {
+    if (!isAutoLaunching) return;
+    isAutoLaunching = false;
+    
+    // Clear any existing timeout
+    if (autoLaunchTimeout) {
+        clearTimeout(autoLaunchTimeout);
+        autoLaunchTimeout = null;
+    }
+
+    autoButton.textContent = 'Auto';
+}
 
 function clearField() {
     console.log('clearField called');
     
     // Stop animation temporarily
     cancelAnimationFrame(animationFrameId);
+    stopAutoLaunch();
 
     // Remove all ball elements from the DOM
     balls.forEach(ball => {
@@ -305,6 +382,13 @@ function animate() {
 document.addEventListener('DOMContentLoaded', () => {
     launchPointController = new LaunchPointController(launchPoint, gameField.clientWidth);
     launchButton.addEventListener('click', createBall);
+    autoButton.addEventListener('click', () => {
+        if (isAutoLaunching) {
+            stopAutoLaunch();
+        } else {
+            startAutoLaunch();
+        }
+    });
     clearButton.addEventListener('click', clearField);
     animate();
 });
