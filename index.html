@@ -14,8 +14,8 @@
         }
         #gameField { 
             position: relative; 
-            width: 500px; 
-            height: 500px; 
+            width: 600px; 
+            height: 600px; 
             border: 2px solid black; 
         }
         #buttonContainer {
@@ -52,12 +52,13 @@
             <div id="launchPoint"></div>
         </div>
     </div>
-
+    
 <script type="module">
+
 import Session from './session.js';
 import AudioEngine from './audio.js';
 
-const sessionID = Session.getSessionID(); // Initialize session
+const sessionID = Session.getSessionID();
 console.log('Session ID:', sessionID);
 
 const audioEngine = new AudioEngine();
@@ -71,9 +72,10 @@ const launchPoint = document.getElementById('launchPoint');
 const balls = [];
 const maxBalls = 10;
 const maxCollisions = 10;
+const COLLISION_COOLDOWN = 240;
 
 const sounds = Array.from({ length: 16 }, (_, i) => `samples/${String(i + 1).padStart(2, '0')}.mp3`);
-const shadesOfGray = Array.from({ length: 16 }, (_, i) => `rgb(${16 * i}, ${16 * i}, ${16 * i})`); // Darkest to lightest
+const shadesOfGray = Array.from({ length: 16 }, (_, i) => `rgb(${16 * i}, ${16 * i}, ${16 * i})`);
 
 let launchPointController;
 let autoLaunchTimeout = null;
@@ -98,7 +100,7 @@ class LaunchPointController {
 
     updatePosition() {
         this.element.style.left = `${this.position}px`;
-        this.element.style.top = '0px'; // Pointer stays on the top wall
+        this.element.style.top = '0px';
     }
 
     animate() {
@@ -125,32 +127,32 @@ class Ball {
         this.x = x;
         this.y = y;
         this.size = size;
-        this.mass = size / 10; // Mass proportional to size, scale factor = 1/10
+        this.mass = size / 10;
         this.originalMass = this.mass;
         this.vx = vx;
         this.vy = vy;
         this.color = color;
         this.sound = sound;
         this.collisions = 0;
+        this.lastCollisionTime = 0;
+        this.justCollided = false; // Flag to track immediate collisions
 
-        // Damping factors to reduce rapid oscillations
-        this.velocityDampingFactor = 0.95;
-        this.collisionDampingFactor = 0.8;
-
-        this.VELOCITY_THRESHOLD = 0.1; // Minimum velocity to prevent stopping
-        this.MIN_VELOCITY = 0.5; // Minimum initial velocity
+        this.velocityDampingFactor = 0.98;
+        this.collisionDampingFactor = 0.85;
+        
+        this.VELOCITY_THRESHOLD = 0.1;
+        this.MIN_VELOCITY = 0.5;
 
         this.element = document.createElement('div');
         this.element.style.width = `${size}px`;
         this.element.style.height = `${size}px`;
         this.element.style.position = 'absolute';
         this.element.style.borderRadius = '50%';
-        this.element.style.backgroundColor = `rgb(0, 0, 0)`; // Start darkest
+        this.element.style.backgroundColor = `rgb(0, 0, 0)`;
 
         gameField.appendChild(this.element);
         this.updatePosition();
 
-        // Play launch sound
         audioEngine.play(this.sound);
     }
 
@@ -164,7 +166,7 @@ class Ball {
         this.vx *= this.velocityDampingFactor;
         this.vy *= this.velocityDampingFactor;
 
-        // Ensure minimum velocity to avoid stopping
+        // Ensure minimum velocity
         if (Math.abs(this.vx) < this.VELOCITY_THRESHOLD) this.vx = Math.sign(this.vx) * this.VELOCITY_THRESHOLD || this.MIN_VELOCITY;
         if (Math.abs(this.vy) < this.VELOCITY_THRESHOLD) this.vy = Math.sign(this.vy) * this.VELOCITY_THRESHOLD || this.MIN_VELOCITY;
 
@@ -172,6 +174,13 @@ class Ball {
         this.y += this.vy;
         this.checkCollisionWithWalls();
         this.updatePosition();
+        
+        // Reset collision flag after movement
+        this.justCollided = false;
+    }
+
+    canRegisterCollision() {
+        return Date.now() - this.lastCollisionTime >= COLLISION_COOLDOWN;
     }
 
     checkCollisionWithWalls() {
@@ -201,21 +210,22 @@ class Ball {
             collided = true;
         }
 
-        if (collided) {
-            this.handleCollision();
-            // Reduce volume for wall collisions to make it less harsh
+        // Register wall collision if it's been long enough since last collision
+        if (collided && this.canRegisterCollision()) {
+            this.registerCollision();
             audioEngine.play(this.sound, { position: this.x / gameField.clientWidth, volume: 0.5 });
         }
     }
 
-    handleCollision() {
+    registerCollision() {
+        if (!this.canRegisterCollision()) return;
+        
+        this.lastCollisionTime = Date.now();
         this.collisions += 1;
 
-        // Calculate the new shade of gray
         const grayValue = Math.floor((this.collisions / maxCollisions) * 255);
         this.element.style.backgroundColor = `rgb(${grayValue}, ${grayValue}, ${grayValue})`;
 
-        // Check if the ball reached its maximum collisions
         if (this.collisions >= maxCollisions) {
             this.remove();
         }
@@ -228,14 +238,95 @@ class Ball {
     }
 }
 
+function checkCollisionBetweenBalls(ball1, ball2) {
+    // Skip if balls just collided in this frame
+    if (ball1.justCollided || ball2.justCollided) return;
+
+    const dx = ball1.x - ball2.x;
+    const dy = ball1.y - ball2.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const minDistance = (ball1.size + ball2.size) / 2;
+
+    if (distance < minDistance) {
+        // Mark both balls as having collided this frame
+        ball1.justCollided = true;
+        ball2.justCollided = true;
+
+        // Normalize collision vector
+        const nx = dx / distance;
+        const ny = dy / distance;
+
+        // Calculate relative velocity
+        const dvx = ball1.vx - ball2.vx;
+        const dvy = ball1.vy - ball2.vy;
+        
+        // Calculate relative velocity along collision normal
+        const velocityAlongNormal = dvx * nx + dvy * ny;
+
+        // Only proceed if objects are moving toward each other
+        if (velocityAlongNormal > 0) return;
+
+        // Separate the balls immediately to prevent overlap
+        const overlap = minDistance - distance;
+        const separationX = (overlap * nx);
+        const separationY = (overlap * ny);
+        
+        // Move balls apart proportionally to their masses
+        const totalMass = ball1.mass + ball2.mass;
+        const ball1Ratio = ball2.mass / totalMass;
+        const ball2Ratio = ball1.mass / totalMass;
+        
+        ball1.x += separationX * ball1Ratio;
+        ball1.y += separationY * ball1Ratio;
+        ball2.x -= separationX * ball2Ratio;
+        ball2.y -= separationY * ball2Ratio;
+
+        // Calculate impulse scalar
+        const restitution = 1.0; // Perfectly elastic collision
+        const impulse = -(1 + restitution) * velocityAlongNormal / totalMass;
+
+        // Apply impulse
+        const impulseX = impulse * nx;
+        const impulseY = impulse * ny;
+
+        // Update velocities
+        ball1.vx += impulseX * ball2.mass;
+        ball1.vy += impulseY * ball2.mass;
+        ball2.vx -= impulseX * ball1.mass;
+        ball2.vy -= impulseY * ball1.mass;
+
+        // Ensure minimum separation velocity to prevent sticking
+        const minSeparationVelocity = 0.5;
+        const relativeVelocityAfter = 
+            (ball1.vx - ball2.vx) * nx + 
+            (ball1.vy - ball2.vy) * ny;
+
+        if (Math.abs(relativeVelocityAfter) < minSeparationVelocity) {
+            const adjustment = (minSeparationVelocity - Math.abs(relativeVelocityAfter)) / 2;
+            ball1.vx += nx * adjustment;
+            ball1.vy += ny * adjustment;
+            ball2.vx -= nx * adjustment;
+            ball2.vy -= ny * adjustment;
+        }
+
+        // Only register collision if cooldown period has passed
+        if (ball1.canRegisterCollision()) {
+            ball1.registerCollision();
+            audioEngine.play(ball1.sound, { position: ball1.x / gameField.clientWidth, volume: 0.7 });
+        }
+        if (ball2.canRegisterCollision()) {
+            ball2.registerCollision();
+            audioEngine.play(ball2.sound, { position: ball2.x / gameField.clientWidth, volume: 0.7 });
+        }
+    }
+}
+
+// Rest of the code remains unchanged
 function isLaunchSafe(startX, startY, size) {
-    // Check distance to all existing balls
     return balls.every(ball => {
         const dx = startX - (ball.x + ball.size / 2);
         const dy = startY - (ball.y + ball.size / 2);
         const distance = Math.sqrt(dx * dx + dy * dy);
-        
-        // Prevent launch if too close 
         return distance > (ball.size * 1.5);
     });
 }
@@ -245,11 +336,10 @@ function createBall() {
         const startPos = launchPointController.getPosition();
         const segment = Math.floor(startPos.x / (gameField.clientWidth / 16));
 
-        const size = ballSizes[segment]; // Larger balls are heavier
+        const size = ballSizes[segment];
         const color = shadesOfGray[segment];
         const sound = sounds[segment];
 
-        // Check if launch is safe
         if (!isLaunchSafe(startPos.x, startPos.y, size)) {
             console.log('Launch blocked due to proximity');
             return;
@@ -258,10 +348,9 @@ function createBall() {
         const centerX = gameField.clientWidth / 2;
         const centerY = gameField.clientHeight / 2;
 
-        const impulse = 3; // Impulse is constant
+        const impulse = 3;
         const angle = Math.atan2(centerY - startPos.y, centerX - startPos.x);
         
-        // Adjust initial velocity to prevent extremely rapid initial collisions
         const vx = (impulse * Math.cos(angle));
         const vy = (impulse * Math.sin(angle));
 
@@ -270,43 +359,10 @@ function createBall() {
     }
 }
 
-function checkCollisionBetweenBalls(ball1, ball2) {
-    const dx = ball1.x - ball2.x;
-    const dy = ball1.y - ball2.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-
-    if (distance < (ball1.size + ball2.size) / 2) {
-        const nx = dx / distance;
-        const ny = dy / distance;
-
-        // Relative velocity
-        const dvx = ball1.vx - ball2.vx;
-        const dvy = ball1.vy - ball2.vy;
-
-        // Impulse scalar considering mass
-        const impulse = (2 * (dvx * nx + dvy * ny)) / (ball1.mass + ball2.mass);
-
-        // Adjust velocities based on impulse and mass with damping
-        ball1.vx -= (impulse * ball2.mass * nx) * ball1.collisionDampingFactor;
-        ball1.vy -= (impulse * ball2.mass * ny) * ball1.collisionDampingFactor;
-        ball2.vx += (impulse * ball1.mass * nx) * ball2.collisionDampingFactor;
-        ball2.vy += (impulse * ball1.mass * ny) * ball2.collisionDampingFactor;
-
-        // Play stereo sound with reduced volume
-        audioEngine.play(ball1.sound, { position: ball1.x / gameField.clientWidth, volume: 0.7 });
-        audioEngine.play(ball2.sound, { position: ball2.x / gameField.clientWidth, volume: 0.7 });
-
-        ball1.handleCollision();
-        ball2.handleCollision();
-    }
-}
-
 function generateRandomLaunchSequence() {
-    // Target: 2 balls in 10 seconds
     const targetBallCount = 2;
-    const timeWindow = 10000; // 10 seconds
+    const timeWindow = 10000;
 
-    // Fallback to a minimum number of balls if Poisson distribution yields zero
     function poissonRandom(lambda) {
         const L = Math.exp(-lambda);
         let p = 1;
@@ -315,19 +371,15 @@ function generateRandomLaunchSequence() {
             k++;
             p *= Math.random();
         } while (p > L);
-        return Math.max(1, k - 1); // Ensure at least 1 ball
+        return Math.max(1, k - 1);
     }
 
-    // Generate ball count using Poisson distribution
     const ballCount = poissonRandom(targetBallCount);
-
-    // Generate random launch times
     const launchTimes = [];
     for (let i = 0; i < ballCount; i++) {
         launchTimes.push(Math.random() * timeWindow);
     }
 
-    // Sort launch times
     return launchTimes.sort((a, b) => a - b);
 }
 
@@ -343,22 +395,18 @@ function startAutoLaunch() {
         
         launchTimes.forEach((time, index) => {
             autoLaunchTimeout = setTimeout(() => {
-                // Only create a ball if we haven't reached max balls
                 if (balls.length < maxBalls) {
                     createBall();
                 }
                 
-                // If this is the last ball in the sequence, schedule next cycle
                 if (index === launchTimes.length - 1) {
-                    // Schedule next cycle with a small random variation
-                    const nextCycleDelay = 10000 + (Math.random() * 2000 - 1000); // 10s ± 1s
+                    const nextCycleDelay = 10000 + (Math.random() * 2000 - 1000);
                     autoLaunchTimeout = setTimeout(continuousLaunchCycle, nextCycleDelay);
                 }
             }, time);
         });
     }
 
-    // Start the first launch cycle
     continuousLaunchCycle();
 }
 
@@ -366,7 +414,6 @@ function stopAutoLaunch() {
     if (!isAutoLaunching) return;
     isAutoLaunching = false;
     
-    // Clear any existing timeout
     if (autoLaunchTimeout) {
         clearTimeout(autoLaunchTimeout);
         autoLaunchTimeout = null;
@@ -378,25 +425,21 @@ function stopAutoLaunch() {
 function clearField() {
     console.log('clearField called');
     
-    // Stop animation temporarily
     cancelAnimationFrame(animationFrameId);
     stopAutoLaunch();
 
-    // Remove all ball elements from the DOM
     balls.forEach(ball => {
         if (ball.element.parentNode) {
             gameField.removeChild(ball.element);
         }
     });
 
-    // Clear the balls array
     balls.length = 0;
 
-    // Restart the animation loop
     animate();
 }
 
-let animationFrameId; // Declare globally
+let animationFrameId;
 
 function animate() {
     balls.forEach((ball, index) => {
@@ -406,7 +449,6 @@ function animate() {
         }
     });
 
-    // Store the animation frame ID
     animationFrameId = requestAnimationFrame(animate);
 }
 
