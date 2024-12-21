@@ -137,8 +137,8 @@ class Ball {
         this.lastCollisionTime = 0;
         this.justCollided = false; // Flag to track immediate collisions
 
-        this.velocityDampingFactor = 0.985;
-        this.collisionDampingFactor = 0.9;
+        this.velocityDampingFactor = 0.995;
+        this.collisionDampingFactor = 0.67;
         
         this.VELOCITY_THRESHOLD = 0.1;
         this.MIN_VELOCITY = 0.5;
@@ -321,7 +321,6 @@ function checkCollisionBetweenBalls(ball1, ball2) {
     }
 }
 
-// Rest of the code remains unchanged
 function isLaunchSafe(startX, startY, size) {
     return balls.every(ball => {
         const dx = startX - (ball.x + ball.size / 2);
@@ -348,11 +347,13 @@ function createBall() {
         const centerX = gameField.clientWidth / 2;
         const centerY = gameField.clientHeight / 2;
 
-        const impulse = 3;
         const angle = Math.atan2(centerY - startPos.y, centerX - startPos.x);
         
-        const vx = (impulse * Math.cos(angle));
-        const vy = (impulse * Math.sin(angle));
+        // Generate random impulse between 1.5 and 3.5
+        const randomImpulse = 1.5 + Math.random() * 2; // 2 is the difference between 3.5 and 1.5
+        
+        const vx = (randomImpulse * Math.cos(angle));
+        const vy = (randomImpulse * Math.sin(angle));
 
         const ball = new Ball(startPos.x - size / 2, startPos.y, vx, vy, size, color, sound);
         balls.push(ball);
